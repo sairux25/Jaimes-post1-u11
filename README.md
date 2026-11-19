@@ -78,3 +78,7 @@ Dividir en más streams no reduce el tiempo total de copia, solo cambia el momen
 Capturas: capturas/CP1_ejecucion_vectorAdd.png y capturas/CP4_ejecucion_vectorAddStream.png
 
 Las dos decisiones se apoyan en los tiempos medidos en este equipo. La ejecución de vectorAdd con 16M muestra el tiempo de kernel que limita el ahorro, y la de vectorAddStream deja ver que con 4 streams la reducción fue de 11.1 %, lejos de crecer al ritmo del número de streams.
+
+# PARTE 2 — Análisis comparativo de aceleradores de IA
+
+El análisis completo está en docs/analisis-comparativo.md. Las cifras de MLPerf se tomaron de los registros oficiales de la versión 4.1 publicados por MLCommons, y las especificaciones y precios de las páginas de NVIDIA, Google Cloud, AMD y Apple.
