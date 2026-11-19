@@ -23,3 +23,13 @@ nvcc -O2 -arch=sm_89 -o vectorAddStream src/vectorAddStream.cu
 Capturas: capturas/CP1_compilacion_vectorAdd.png y capturas/CP1_ejecucion_vectorAdd.png
 
 La primera vez que se compiló solo con nvcc -O2, el kernel tardó 584.96 ms, un tiempo muy alto para sumar 16M elementos. Al no indicar la arquitectura, nvcc genera un código genérico y el driver lo traduce para la GPU que lo ejecuta justo en esa primera corrida, así que ese tiempo terminó dentro de la medición. Para evitarlo se agregó -arch=sm_89 al comando, que corresponde a la GPU de este equipo. Con ese cambio la CPU tardó 42.21 ms, el kernel 7.24 ms y la salida mostró Errores: 0.
+
+## Checkpoint 2 — Multiplicación de matrices con tiling
+Capturas: capturas/CP2_compilacion_matMul.png y capturas/CP2_ejecucion_matMul.png
+
+Del programa de matMul solo estaba el kernel con tiling, así que se escribió una versión naive que lee todo desde memoria global, la multiplicación en CPU para comparar y un main que mide los dos kernels con cudaEvent en N=512 y N=1024. Cada kernel se lanza una vez antes de medir para que la carga inicial no se cuente en ninguno. Los resultados coinciden con la CPU, con un error máximo de 4.58e-05 en N=512 y de 9.16e-05 en N=1024, muy por debajo de 1e-3.
+
+| N | Naive (ms) | Tiling (ms) | Speedup |
+|---|---|---|---|
+| 512 | 0.618 | 0.491 | 1.26x |
+| 1024 | 4.252 | 3.363 | 1.26x |
