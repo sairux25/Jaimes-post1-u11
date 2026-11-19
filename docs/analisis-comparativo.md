@@ -101,3 +101,57 @@ La ganancia en exactitud tiene un costo, que MLPerf controla con un límite estr
 La versión INT8 de ResNet-50 pierde 0.67 puntos y cumple el límite del 99 %. En BERT-Large los dos modelos INT8 cumplen el 99 % pero ninguno alcanza el 99.9 %, lo que muestra que los modelos de lenguaje son más sensibles a la cuantización. MLPerf exige además que esta exactitud se mida sobre el conjunto de validación completo y no sobre una muestra.
 
 Cuantizar no es un simple cambio de tipo de dato. El rango de valores de FP32 no se reparte de forma uniforme sobre los 256 niveles de INT8, así que un cast directo pierde mucha información. Wu et al. (2020) muestran que con calibración posterior al entrenamiento, que ajusta factores de escala por capa usando datos representativos, o con entrenamiento consciente de la cuantización, la exactitud se mantiene dentro del 1 % de la versión en punto flotante en todas las redes que estudiaron, incluidas MobileNet y BERT-Large.
+
+## Decisión Técnica — GPU centralizada o FPGA distribuida para el Perfil B
+Las 50 líneas a 10 imágenes por segundo suman 500 imágenes por segundo. En MLPerf v4.1 cada H100 de un sistema de ocho procesó en promedio 73,026 imágenes por segundo de ResNet-50 en el escenario Server, un modelo más pesado que ResNet-18, así que la demanda sería menos del 1 % de su capacidad y una GPU podría cumplir los 5 ms en promedio con lotes pequeños. Ese mismo sistema al máximo tuvo un percentil 99 de 10.39 ms, el doble del presupuesto.
+
+En adquisición es más barata la GPU centralizada, cerca de 30,000 USD frente a 400,000 USD de 50 FPGA a 8,000 USD, o 237,350 USD con el precio actual de AMD. Sin embargo crea un punto único de falla, porque si la GPU o el servidor caen las 50 líneas quedan sin inspección a la vez, y además las líneas compiten por el mismo dispositivo en los picos de carga.
+
+Si el rechazo de piezas tiene implicaciones de seguridad industrial, debe preferirse la FPGA distribuida, porque garantiza una latencia máxima fija y no solo un promedio. Si en cambio es control de calidad no crítico y manda el costo, la GPU centralizada es razonable con un servidor de respaldo.
+
+## Decisión Técnica — ¿Conviene cuantizar a INT8 el modelo del Perfil B?
+Aunque el modelo ya cumpla los 5 ms en FP16, cuantizarlo a INT8 duplica el throughput del mismo hardware, como se ve en la tabla de la sección 5. Ese margen permite atender más líneas de producción sin comprar más equipos y sin subir la latencia de cada imagen, algo útil si la planta crece más allá de las 50 líneas.
+
+Validar solo con el top-1 general no es suficiente. En ResNet-50 la versión INT8 perdió 0.67 puntos en promedio, pero ese promedio lo dominan las clases mayoritarias. La clase defecto suele ser minoritaria y puede ser más sensible al ruido de cuantización, por lo que el equipo debe medir precisión y recall sobre la clase defecto en un conjunto de validación propio, antes y después de cuantizar.
+
+Se recomienda cuantizar a INT8 solo si esa validación confirma que el recall de piezas defectuosas no baja de forma significativa. Un falso negativo deja pasar una pieza mala hasta el cliente, mientras que el throughput extra solo es una ventaja de capacidad, y no compensa perder justo la clase que más importa detectar.
+
+## Conclusiones
+
+Ningún acelerador gana en todas las dimensiones. La GPU H100 lidera el throughput en ResNet-50, BERT-Large y Stable Diffusion XL y tiene el ecosistema más completo, pero consume 700 W y cuesta alrededor de 30,000 USD. La TPU ofrece buen rendimiento por chip y precios de alquiler predecibles, aunque obliga a quedarse en Google Cloud. Los aceleradores de flujo de datos mostraron casi tres veces la eficiencia energética de la GPU en ResNet-50, y la NPU integrada es la opción natural para dispositivos. La FPGA no compite en throughput, pero su latencia determinística la hace la elección más segura para inspección industrial crítica.
+
+La cuantización INT8 duplica el rendimiento teórico en todas las generaciones revisadas, pero solo es útil con calibración y validando la exactitud sobre las clases que realmente importan. En general la mejor elección depende del perfil de carga, del presupuesto y de qué tan grave es fallar.
+
+## Referencias
+
+AMD. (2023). *Alveo U55C data center accelerator card data sheet (DS978)*. https://docs.amd.com/r/en-US/ds978-u55c/Summary
+
+AMD. (s.f.). *AMD Alveo U55C data center accelerator card*. Recuperado el 18 de noviembre de 2026, de https://www.amd.com/en/products/accelerators/alveo/u55c/a-u55c-p00g-pq-g.html
+
+Apple. (2025, 5 de marzo). *Apple unveils new Mac Studio, the most powerful Mac ever* [Comunicado de prensa]. https://www.apple.com/newsroom/2025/03/apple-unveils-new-mac-studio-the-most-powerful-mac-ever/
+
+Google Cloud. (s.f.-a). *TPU v5e*. Recuperado el 18 de noviembre de 2026, de https://cloud.google.com/tpu/docs/v5e
+
+Google Cloud. (s.f.-b). *TPU v6e*. Recuperado el 18 de noviembre de 2026, de https://cloud.google.com/tpu/docs/v6e
+
+Google Cloud. (s.f.-c). *Cloud TPU pricing*. Recuperado el 18 de noviembre de 2026, de https://cloud.google.com/tpu/pricing
+
+Jouppi, N. P., Kurian, G., Li, S., Ma, P., Nagarajan, R., Nai, L., Patil, N., Subramanian, S., Swing, A., Towles, B., Young, C., Zhou, X., Zhou, Z., & Patterson, D. (2023). TPU v4: An optically reconfigurable supercomputer for machine learning with hardware support for embeddings. *Proceedings of the 50th Annual International Symposium on Computer Architecture (ISCA '23)*. https://arxiv.org/abs/2304.01433
+
+MacRumors. (2025, 5 de marzo). *A maxed out M3 Ultra Mac Studio will cost you $14,099*. https://www.macrumors.com/2025/03/05/MAXED-OUT-M3-ULTRA-MAC-STUDIO-14099/
+
+MLCommons. (2024). *MLPerf Inference v4.1 results* [Conjunto de datos]. GitHub. https://github.com/mlcommons/inference_results_v4.1
+
+MLCommons. (s.f.). *MLPerf Inference benchmark suite, reference implementations*. Recuperado el 18 de noviembre de 2026, de https://github.com/mlcommons/inference
+
+NVIDIA. (2019). *NVIDIA T4 Tensor Core GPU datasheet*. https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/tesla-t4/t4-tensor-core-datasheet.pdf
+
+NVIDIA. (2020). *NVIDIA A100 Tensor Core GPU datasheet*. https://www.nvidia.com/en-us/data-center/a100/
+
+NVIDIA. (2023). *NVIDIA H100 Tensor Core GPU datasheet*. https://www.nvidia.com/en-us/data-center/h100/
+
+Tom's Hardware. (2023). *Nvidia makes nearly 1,000% profit on H100 GPUs: Report*. https://www.tomshardware.com/news/nvidia-makes-1000-profit-on-h100-gpus-report
+
+U.S. Energy Information Administration. (2025). *Electric power annual 2024, average price of electricity to ultimate customers by end-use sector*. https://www.eia.gov/electricity/sales_revenue_price/pdf/table_4.pdf
+
+Wu, H., Judd, P., Zhang, X., Isaev, M., & Micikevicius, P. (2020). *Integer quantization for deep learning inference: Principles and empirical evaluation*. arXiv. https://arxiv.org/abs/2004.09602
