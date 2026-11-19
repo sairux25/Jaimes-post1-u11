@@ -33,3 +33,48 @@ Del programa de matMul solo estaba el kernel con tiling, así que se escribió u
 |---|---|---|---|
 | 512 | 0.618 | 0.491 | 1.26x |
 | 1024 | 4.252 | 3.363 | 1.26x |
+
+## Checkpoint 3 — README de la Parte 1
+Capturas: capturas/CP1_tamanos_vectorAdd.png y capturas/CP1_ejecucion_vectorAdd.png
+
+Para llenar la tabla de vectorAdd hacían falta tres tamaños y el tiempo total con las copias, pero el programa solo medía el kernel con 16M. Por eso N quedó como un valor que se puede cambiar al compilar con -DN, y se agregaron dos eventos más que toman el tiempo desde la primera copia hacia la GPU hasta que el resultado vuelve al host. Con 1M y 4M también se obtuvo Errores: 0.
+
+| N | CPU (ms) | GPU kernel (ms) | GPU total con cudaMemcpy (ms) |
+|---|---|---|---|
+| 1M (1048576) | 5.99 | 12.66 | 49.76 |
+| 4M (4194304) | 8.58 | 3.37 | 28.49 |
+| 16M (16777216) | 42.21 | 7.24 | 77.90 |
+
+Con N grande el kernel le gana a la CPU porque cada elemento lo suma un thread distinto y miles de ellos trabajan a la vez, mientras la CPU recorre el arreglo uno por uno. Con 16M el kernel tardó 7.24 ms contra 42.21 ms de la CPU, casi 6 veces menos. Con 1M pasó lo contrario y el kernel marcó 12.66 ms, más que con 16M. Esto se debe a que la medición incluye el primer lanzamiento del kernel, que carga el módulo en la GPU, y con tan pocos datos ese costo fijo pesa más que la suma.
+
+El tiempo total sí puede quedar por encima de la CPU, ya que antes del kernel hay que enviar A y B por el bus PCIe y al final traer C de vuelta, y en una suma esas copias duran mucho más que el cálculo. En este equipo pasó con los tres tamaños, por ejemplo con 1M el total fue 49.76 ms y la CPU solo necesitó 5.99 ms. Cuando N es pequeño la diferencia crece en proporción, porque el costo fijo de arrancar las copias y el kernel se reparte entre muy pocos elementos.
+
+## Checkpoint 4 — Transferencia asíncrona con streams
+Capturas: capturas/CP4_compilacion_vectorAddStream.png y capturas/CP4_ejecucion_vectorAddStream.png
+
+Con nvcc -O2 la primera ejecución dio 596.52 ms para la versión síncrona y una reducción de 94.3 %, una cifra que no tenía sentido para un solapamiento real. Como la versión síncrona es la que se mide primero, se quedaba con el tiempo que tarda el driver en traducir el código para la GPU, y al compilar con -arch=sm_89, igual que en vectorAdd, ese tiempo desapareció. Además el programa no revisaba si los resultados eran correctos, entonces se le agregó la misma comparación contra la CPU de vectorAdd para las dos versiones. Entre una y otra se limpian h_C y d_C, para que los streams no aprovecharan el resultado anterior. La versión síncrona tardó 36.97 ms, la de 4 streams 32.87 ms y ninguna tuvo errores.
+
+| Versión | Tiempo total (ms) | Errores |
+|---|---|---|
+| Síncrona | 36.97 | 0 |
+| 4 streams | 32.87 | 0 |
+| Reducción | 11.1 % | |
+
+## Decisión Técnica — cudaMemcpyAsync con streams o transferencia síncrona para vectorAdd
+Transferir los cerca de 192 MB de N de 16M a un ancho de banda efectivo de 10 a 12 GB/s toma entre 16 y 19 ms, un orden de magnitud más que los 1.8 ms de referencia del kernel. En este equipo el kernel tardó 7.24 ms y la versión síncrona completa 36.97 ms, es decir que unos 30 ms fueron solo copias y por eso vectorAdd es una operación memory-bound.
+
+El ahorro máximo teórico de los streams está acotado por el tiempo de cómputo, porque el solapamiento solo esconde el kernel detrás de las copias y no elimina la transferencia. Con un kernel de 7.24 ms el límite era bajar unos 7 ms de los 36.97 ms, alrededor del 20 %, y la medición dio 4.10 ms menos, un 11.1 %.
+
+Usar streams en vectorAdd aporta poco frente al trabajo de reservar memoria pinned y repartir los datos en chunks, por lo que la transferencia síncrona resulta suficiente. En cambio matMulTiled aprovecharía mucho más el solapamiento, ya que con N de 1024 mueve 12 MB, que a 10 GB/s son cerca de 1.2 ms, mientras su kernel tardó 3.363 ms. Ahí el cómputo alcanza a ocultar toda la copia.
+
+## Decisión Técnica — Cuántos streams usar y qué limita la ganancia
+Aumentar NSTREAMS de 4 a 16 no seguiría bajando el tiempo de forma proporcional, porque todos los streams comparten el mismo bus PCIe y los mismos motores de copia. Con 4 streams ya se logró 11.1 %, cerca del tope de unos 7 ms que pone el kernel, y más streams apenas podrían acercarse un poco a ese límite.
+
+El número de copy engines define cuántas copias avanzan a la vez. Si la GPU tiene 1 o 2 motores DMA, con 2 a 4 streams ya hay siempre una copia en marcha mientras otro chunk se procesa. Los demás streams solo esperan su turno y además suman el costo de lanzar más copias y kernels pequeños.
+
+Dividir en más streams no reduce el tiempo total de copia, solo cambia el momento en que se mueve cada parte. Los 192 MB pasan igual por el mismo bus, y por eso con 4 streams el programa siguió tardando 32.87 ms, casi todo en copias.
+
+## Checkpoint 5 — Decisiones técnicas de la Parte 1
+Capturas: capturas/CP1_ejecucion_vectorAdd.png y capturas/CP4_ejecucion_vectorAddStream.png
+
+Las dos decisiones se apoyan en los tiempos medidos en este equipo. La ejecución de vectorAdd con 16M muestra el tiempo de kernel que limita el ahorro, y la de vectorAddStream deja ver que con 4 streams la reducción fue de 11.1 %, lejos de crecer al ritmo del número de streams.
