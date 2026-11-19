@@ -75,3 +75,29 @@ Para la inferencia en el borde el costo dominante no es el chip sino la integrac
 **Perfil B, manufactura con inspección visual en menos de 5 ms en 50 líneas.** Se recomienda una FPGA por línea. Primero, la lógica fija en hardware da una latencia máxima determinística, sin sistema operativo ni planificador. Segundo, cada línea queda aislada, así que una falla no detiene las demás. Tercero, la U55C consume como máximo 150 W, frente a 700 W de una H100. La limitación es el costo, que a 4,747 USD por tarjeta suma 237,350 USD para 50 líneas, y la dificultad de actualizar el modelo, porque cada cambio requiere volver a sintetizar el diseño. Las decisiones técnicas del final amplían este perfil.
 
 **Perfil C, proveedor de nube que entrena modelos de 70B en clústeres de 512 aceleradores.** Se recomienda la GPU H100 SXM, con la TPU v5p como alternativa. Primero, los 140 GB de pesos en FP16 de un modelo de 70B no caben en una sola tarjeta, así que el entrenamiento depende de la comunicación colectiva, y la H100 ofrece NVLink de 900 GB/s dentro del nodo (NVIDIA, 2023). Segundo, la H100 lidera el throughput en los tres modelos de MLPerf de la sección 2. Tercero, CUDA tiene el mayor soporte de bibliotecas de entrenamiento distribuido. La limitación es el consumo, ya que 512 GPU a 700 W suman 358.4 kW solo en aceleradores. La TPU v4 demostró escalar a 4,096 chips con interconexión óptica reconfigurable (Jouppi et al., 2023), pero obliga a quedarse en Google Cloud.
+
+## 5. Cuantización INT8 frente a FP32
+
+Reducir la precisión de FP32 o FP16 a INT8 permite que las unidades matriciales procesen el doble de operaciones por ciclo. Este patrón se repite en varias generaciones de hardware, como se ve en las hojas de especificaciones oficiales.
+
+| Acelerador | FP16 / BF16 | INT8 | Relación |
+|---|---|---|---|
+| NVIDIA T4 | 65 TFLOPS | 130 TOPS | 2× (NVIDIA, 2019) |
+| NVIDIA A100 | 312 TFLOPS | 624 TOPS | 2× (NVIDIA, 2020) |
+| NVIDIA H100 SXM | 1979 TFLOPS | 3958 TOPS | 2×, ambas con dispersión (NVIDIA, 2023) |
+| Google TPU v5e | 197 TFLOPS | 393 TOPS | 2× (Google Cloud, s.f.-a) |
+| Google TPU v6e | 918 TFLOPS | 1836 TOPS | 2× (Google Cloud, s.f.-b) |
+
+La ganancia en exactitud tiene un costo, que MLPerf controla con un límite estricto. La siguiente tabla usa los modelos de referencia publicados en el repositorio oficial de MLCommons (MLCommons, s.f.).
+
+| Modelo | Precisión | Exactitud reportada | Restricción MLPerf |
+|---|---|---|---|
+| ResNet-50 v1.5 | FP32 (referencia) | 76.456 % top-1 | Referencia |
+| ResNet-50 v1.5 | INT8 calibrado | 75.790 % top-1 | ≥ 99 % de la referencia, es decir ≥ 75.69 % |
+| BERT-Large | FP32 (referencia) | F1 de 90.874 | Referencia |
+| BERT-Large | INT8 con ajuste fino (versión PyTorch) | F1 de 90.633 | ≥ 99 % (89.965) en bert-99 y ≥ 99.9 % (90.783) en bert-99.9 |
+| BERT-Large | INT8 simétrico por tensor con ajuste fino (versión ONNX) | F1 de 90.067 | Cumple bert-99, no cumple bert-99.9 |
+
+La versión INT8 de ResNet-50 pierde 0.67 puntos y cumple el límite del 99 %. En BERT-Large los dos modelos INT8 cumplen el 99 % pero ninguno alcanza el 99.9 %, lo que muestra que los modelos de lenguaje son más sensibles a la cuantización. MLPerf exige además que esta exactitud se mida sobre el conjunto de validación completo y no sobre una muestra.
+
+Cuantizar no es un simple cambio de tipo de dato. El rango de valores de FP32 no se reparte de forma uniforme sobre los 256 niveles de INT8, así que un cast directo pierde mucha información. Wu et al. (2020) muestran que con calibración posterior al entrenamiento, que ajusta factores de escala por capa usando datos representativos, o con entrenamiento consciente de la cuantización, la exactitud se mantiene dentro del 1 % de la versión en punto flotante en todas las redes que estudiaron, incluidas MobileNet y BERT-Large.
